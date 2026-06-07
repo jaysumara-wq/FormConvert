@@ -1,0 +1,439 @@
+@page "/application-schema"
+@using SchemaEditorCore.Models
+@using SchemaEditorCore.Services
+@inject SchemaDataService SchemaDataService
+@inject IJSRuntime JS
+
+<div class="schema-editor-container">
+    <!-- Menu Bar -->
+    <div class="menubar-container">
+        <nav class="menubar">
+            <div class="menu-group">
+                <button class="menu-item" @onclick="ToggleSchemaMenu">
+                    Schema ▼
+                </button>
+                @if (showSchemaMenu)
+                {
+                    <div class="dropdown-menu">
+                        <div class="dropdown-group">
+                            <button class="dropdown-item" @onclick="ToggleRecreateMenu">
+                                Recreate ▶
+                            </button>
+                            @if (showRecreateMenu)
+                            {
+                                <div class="submenu">
+                                    <button class="submenu-item" @onclick="RecreateWithMore">With More</button>
+                                    <button class="submenu-item" @onclick="RecreateWithLess">With Less</button>
+                                </div>
+                            }
+                        </div>
+                        <button class="dropdown-item" @onclick="AcceptSchema">Accept</button>
+                        <button class="dropdown-item" @onclick="ExitSchema">Exit</button>
+                    </div>
+                }
+            </div>
+        </nav>
+    </div>
+
+    <!-- Main Content Area -->
+    <div class="splitter-container">
+        <!-- Left Panel: Tree View -->
+        <div class="tree-panel">
+            @if (treeNodes != null && treeNodes.Count > 0)
+            {
+                <div class="tree-view-container">
+                    <ul class="tree-view">
+                        @foreach (var node in treeNodes)
+                        {
+                            <TreeNodeComponent Node="@node" OnNodeSelected="HandleNodeSelected" OnNodeHover="HandleNodeHover" />
+                        }
+                    </ul>
+                </div>
+            }
+            else
+            {
+                <div class="tree-empty-state">Loading schema...</div>
+            }
+        </div>
+
+        <!-- Splitter -->
+        <div class="splitter-handle" @onmousedown="StartDrag"></div>
+
+        <!-- Right Panel: Details -->
+        <div class="details-panel">
+            <div class="tab-control">
+                <div class="tab-headers">
+                    <button class="tab-header @(selectedTab == 0 ? "active" : "")" @onclick="@(() => selectedTab = 0)">Slots</button>
+                    <button class="tab-header @(selectedTab == 1 ? "active" : "")" @onclick="@(() => selectedTab = 1)">References</button>
+                </div>
+
+                <div class="tab-content">
+                    @if (selectedTab == 0)
+                    {
+                        <div class="slots-content">
+                            <DataGridComponent Items="@slotItems" 
+                                            Columns="@slotColumns" 
+                                            OnRowSelect="HandleSlotSelected"
+                                            OnContextMenu="ShowSlotContextMenu" />
+                            
+                            @if (choiceItems != null && choiceItems.Count > 0)
+                            {
+                                <div class="choices-grid">
+                                    <DataGridComponent Items="@choiceItems" 
+                                                    Columns="@choiceColumns" 
+                                                    OnRowSelect="HandleChoiceSelected"
+                                                    OnContextMenu="ShowChoiceContextMenu" />
+                                </div>
+                            }
+                        </div>
+                    }
+                    else if (selectedTab == 1)
+                    {
+                        <DataGridComponent Items="@referenceItems" 
+                                        Columns="@referenceColumns" />
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Context Menus -->
+    @if (showSlotContextMenu)
+    {
+        <div class="context-menu" style="left: @(contextMenuX)px; top: @(contextMenuY)px;">
+            <button class="context-menu-item" @onclick="AddNewSlot">Add New</button>
+            <button class="context-menu-item" @onclick="EditSlot" disabled="@(selectedSlotID < 0)">Edit</button>
+            <button class="context-menu-item" @onclick="RemoveSlot" disabled="@(selectedSlotID < 0)">Remove</button>
+            <button class="context-menu-item" @onclick="NormalizeSlot" disabled="@(selectedSlotID < 0)">Normalize</button>
+        </div>
+    }
+
+    @if (showChoiceContextMenu)
+    {
+        <div class="context-menu" style="left: @(contextMenuX)px; top: @(contextMenuY)px;">
+            <button class="context-menu-item" @onclick="AddNewChoice">Add</button>
+            <button class="context-menu-item" @onclick="RemoveChoice" disabled="@(selectedChoiceID < 0)">Remove</button>
+        </div>
+    }
+
+    @if (showTableContextMenu)
+    {
+        <div class="context-menu" style="left: @(contextMenuX)px; top: @(contextMenuY)px;">
+            <div class="context-menu-group">
+                <div class="context-menu-group-title">Table Operations</div>
+                <button class="context-menu-item" @onclick="AddChildTable">Add Child</button>
+                <button class="context-menu-item" @onclick="EditTable" disabled="@(selectedTableID < 0)">Edit</button>
+                <button class="context-menu-item" @onclick="RemoveTable" disabled="@(selectedTableID < 0)">Remove</button>
+            </div>
+            <div class="context-menu-group">
+                <div class="context-menu-group-title">De-Normalize</div>
+                <button class="context-menu-item" @onclick="DenormalizeToString">To String</button>
+                <button class="context-menu-item" @onclick="DenormalizeToNumeric">To Numeric</button>
+                <button class="context-menu-item" @onclick="DenormalizeToChoice">To Fixed Choice</button>
+            </div>
+            <div class="context-menu-group">
+                <div class="context-menu-group-title">Domain Operations</div>
+                <button class="context-menu-item" @onclick="AddFeature">Add Feature</button>
+                <button class="context-menu-item" @onclick="AddTable">Add Table</button>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private ApplicationSchema applicationSchema;
+    private SchemaDataService schemaDataService;
+    private List<TreeNodeItem> treeNodes = new();
+
+    // Selection variables
+    private int selectedTableID = -1;
+    private int selectedDomainID = -1;
+    private int selectedSlotID = -1;
+    private int selectedChoiceID = -1;
+
+    // UI State
+    private int selectedTab = 0;
+    private bool showSchemaMenu = false;
+    private bool showRecreateMenu = false;
+    private bool showSlotContextMenu = false;
+    private bool showChoiceContextMenu = false;
+    private bool showTableContextMenu = false;
+    private double contextMenuX = 0;
+    private double contextMenuY = 0;
+    private int loadingCompleted = 0;
+
+    // Grid Data
+    private List<object> slotItems = new();
+    private List<object> choiceItems = new();
+    private List<object> referenceItems = new();
+    private List<GridColumn> slotColumns = new();
+    private List<GridColumn> choiceColumns = new();
+    private List<GridColumn> referenceColumns = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Initialize with sample data
+        applicationSchema = new ApplicationSchema
+        {
+            SchemaName = "Sample Schema",
+            ApplicationDesc = "Sample Application",
+            DesignLevel = 1,
+            Domains = new List<SchemaDomain>
+            {
+                new SchemaDomain
+                {
+                    DomainID = 1,
+                    DomainName = "Domain 1",
+                    Tables = new List<SchemaTable>
+                    {
+                        new SchemaTable
+                        {
+                            TableID = 1,
+                            DomainID = 1,
+                            TableName = "Users",
+                            TableCode = "USR",
+                            TablePlural = "Users",
+                            Slots = new List<SchemaSlot>
+                            {
+                                new SchemaSlot { SlotID = 1, TableID = 1, SlotCode = "ID", SlotLabel = "User ID", SlotDataType = 3 },
+                                new SchemaSlot { SlotID = 2, TableID = 1, SlotCode = "NAME", SlotLabel = "Name", SlotDataType = 1 }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        schemaDataService = new SchemaDataService();
+        schemaDataService.Initialize(applicationSchema);
+        treeNodes = schemaDataService.GetTreeNodes();
+        InitializeGridColumns();
+        loadingCompleted = 1;
+    }
+
+    private void InitializeGridColumns()
+    {
+        slotColumns = new List<GridColumn>
+        {
+            new GridColumn { Name = "SlotCode", Header = "Code", Width = 100 },
+            new GridColumn { Name = "SlotLabel", Header = "Label", Width = 160 },
+            new GridColumn { Name = "SlotDataType", Header = "Type", Width = 75 },
+            new GridColumn { Name = "SlotDataFormat", Header = "Format", Width = 75 }
+        };
+
+        choiceColumns = new List<GridColumn>
+        {
+            new GridColumn { Name = "Choice", Header = "Choices", Width = 150 }
+        };
+
+        referenceColumns = new List<GridColumn>
+        {
+            new GridColumn { Name = "TableName", Header = "Referenced By", Width = 150 },
+            new GridColumn { Name = "SlotLabel", Header = "Slot", Width = 150 }
+        };
+    }
+
+    private void HandleNodeSelected(TreeNodeItem node)
+    {
+        if (loadingCompleted == 0) return;
+
+        if (node.NodeType == "TableNode")
+        {
+            selectedTableID = node.TableID;
+            selectedDomainID = node.DomainID;
+            LoadTableDetails();
+        }
+    }
+
+    private void HandleNodeHover(TreeNodeItem node)
+    {
+        // Implement hover tooltip
+    }
+
+    private void LoadTableDetails()
+    {
+        var slots = schemaDataService.GetTableSlots(selectedTableID);
+        slotItems = slots.Cast<object>().ToList();
+        referenceItems = schemaDataService.GetTableReferences(selectedTableID).Cast<object>().ToList();
+        choiceItems = new();
+        selectedSlotID = -1;
+    }
+
+    private void HandleSlotSelected(int rowIndex)
+    {
+        if (rowIndex >= 0 && rowIndex < slotItems.Count)
+        {
+            var slot = slotItems[rowIndex] as SchemaSlot;
+            selectedSlotID = slot?.SlotID ?? -1;
+            choiceItems = schemaDataService.GetSlotChoices(selectedSlotID).Cast<object>().ToList();
+        }
+    }
+
+    private void HandleChoiceSelected(int rowIndex)
+    {
+        if (rowIndex >= 0 && rowIndex < choiceItems.Count)
+        {
+            var choice = choiceItems[rowIndex] as SchemaChoice;
+            selectedChoiceID = choice?.ChoiceID ?? -1;
+        }
+    }
+
+    private void ShowSlotContextMenu(double x, double y)
+    {
+        contextMenuX = x;
+        contextMenuY = y;
+        showSlotContextMenu = true;
+        showChoiceContextMenu = false;
+        showTableContextMenu = false;
+    }
+
+    private void ShowChoiceContextMenu(double x, double y)
+    {
+        contextMenuX = x;
+        contextMenuY = y;
+        showChoiceContextMenu = true;
+        showSlotContextMenu = false;
+        showTableContextMenu = false;
+    }
+
+    private void ShowTableContextMenu(double x, double y)
+    {
+        contextMenuX = x;
+        contextMenuY = y;
+        showTableContextMenu = true;
+        showSlotContextMenu = false;
+        showChoiceContextMenu = false;
+    }
+
+    // Menu Actions
+    private void ToggleSchemaMenu() => showSchemaMenu = !showSchemaMenu;
+    private void ToggleRecreateMenu() => showRecreateMenu = !showRecreateMenu;
+
+    private async Task AcceptSchema()
+    {
+        await JS.InvokeVoidAsync("alert", "Schema accepted!");
+    }
+
+    private async Task ExitSchema()
+    {
+        await JS.InvokeVoidAsync("alert", "Exiting schema editor");
+    }
+
+    private async Task RecreateWithMore()
+    {
+        await JS.InvokeVoidAsync("alert", "Recreating with more tables");
+    }
+
+    private async Task RecreateWithLess()
+    {
+        await JS.InvokeVoidAsync("alert", "Recreating with fewer tables");
+    }
+
+    // Slot Actions
+    private async Task AddNewSlot()
+    {
+        await JS.InvokeVoidAsync("alert", "Add new slot");
+    }
+
+    private async Task EditSlot()
+    {
+        await JS.InvokeVoidAsync("alert", $"Edit slot {selectedSlotID}");
+    }
+
+    private async Task RemoveSlot()
+    {
+        schemaDataService.DeleteSlot(selectedSlotID);
+        LoadTableDetails();
+    }
+
+    private async Task NormalizeSlot()
+    {
+        await JS.InvokeVoidAsync("alert", "Normalize slot");
+    }
+
+    // Choice Actions
+    private async Task AddNewChoice()
+    {
+        var value = await JS.InvokeAsync<string>("prompt", "Enter choice value:");
+        if (!string.IsNullOrEmpty(value))
+        {
+            schemaDataService.AddChoice(selectedSlotID, value);
+            choiceItems = schemaDataService.GetSlotChoices(selectedSlotID).Cast<object>().ToList();
+        }
+    }
+
+    private async Task RemoveChoice()
+    {
+        schemaDataService.DeleteChoice(selectedChoiceID);
+        choiceItems = schemaDataService.GetSlotChoices(selectedSlotID).Cast<object>().ToList();
+    }
+
+    // Table Actions
+    private async Task AddChildTable()
+    {
+        await JS.InvokeVoidAsync("alert", "Add child table");
+    }
+
+    private async Task EditTable()
+    {
+        await JS.InvokeVoidAsync("alert", $"Edit table {selectedTableID}");
+    }
+
+    private async Task RemoveTable()
+    {
+        await JS.InvokeVoidAsync("alert", $"Remove table {selectedTableID}");
+    }
+
+    // Denormalize Actions
+    private async Task DenormalizeToString()
+    {
+        schemaDataService.DenormalizeTable(selectedTableID, "String", "");
+        await RefreshView();
+    }
+
+    private async Task DenormalizeToNumeric()
+    {
+        schemaDataService.DenormalizeTable(selectedTableID, "Numeric", "");
+        await RefreshView();
+    }
+
+    private async Task DenormalizeToChoice()
+    {
+        var values = await JS.InvokeAsync<string>("prompt", "Enter choice values (one per line):");
+        if (!string.IsNullOrEmpty(values))
+        {
+            schemaDataService.DenormalizeTable(selectedTableID, "Choice", values);
+            await RefreshView();
+        }
+    }
+
+    // Domain Actions
+    private async Task AddFeature()
+    {
+        await JS.InvokeVoidAsync("alert", "Add new feature");
+    }
+
+    private async Task AddTable()
+    {
+        await JS.InvokeVoidAsync("alert", "Add new table");
+    }
+
+    private void StartDrag(MouseEventArgs e)
+    {
+        // Implement splitter drag
+    }
+
+    private async Task RefreshView()
+    {
+        treeNodes = schemaDataService.GetTreeNodes();
+        LoadTableDetails();
+        StateHasChanged();
+    }
+
+    public class GridColumn
+    {
+        public string Name { get; set; }
+        public string Header { get; set; }
+        public int Width { get; set; }
+    }
+}

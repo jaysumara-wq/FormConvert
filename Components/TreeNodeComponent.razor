@@ -1,0 +1,52 @@
+@using SchemaEditorCore.Models
+
+<li class="tree-node" @oncontextmenu="HandleContextMenu" @oncontextmenu:preventDefault>
+    <div class="tree-node-content">
+        <span class="tree-toggle" @onclick="ToggleExpanded">
+            @if (Node.Children?.Count > 0)
+            {
+                <span class="toggle-icon">@(IsExpanded ? "▼" : "▶")</span>
+            }
+            else
+            {
+                <span class="toggle-icon-empty">•</span>
+            }
+        </span>
+        <span class="tree-node-label" @onclick="@(async () => await OnNodeSelected.InvokeAsync(Node))" title="@Node.ToolTip">
+            @Node.Label
+        </span>
+    </div>
+
+    @if (IsExpanded && Node.Children?.Count > 0)
+    {
+        <ul class="tree-children">
+            @foreach (var child in Node.Children)
+            {
+                <TreeNodeComponent Node="@child" OnNodeSelected="@OnNodeSelected" OnNodeHover="@OnNodeHover" />
+            }
+        </ul>
+    }
+</li>
+
+@code {
+    [Parameter]
+    public TreeNodeItem Node { get; set; }
+
+    [Parameter]
+    public EventCallback<TreeNodeItem> OnNodeSelected { get; set; }
+
+    [Parameter]
+    public EventCallback<TreeNodeItem> OnNodeHover { get; set; }
+
+    private bool IsExpanded = false;
+
+    private void ToggleExpanded()
+    {
+        IsExpanded = !IsExpanded;
+    }
+
+    private void HandleContextMenu(MouseEventArgs e)
+    {
+        // Context menu handled by parent
+    }
+}

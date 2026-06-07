@@ -1,0 +1,109 @@
+@using SchemaEditorCore.Models
+@using System.Reflection
+
+<div class="datagrid-container">
+    @if (Items != null && Items.Count > 0)
+    {
+        <table class="datagrid">
+            <thead>
+                <tr class="datagrid-header">
+                    @foreach (var column in Columns ?? GetColumns())
+                    {
+                        <th class="column-header" style="width: @(column.Width)px">@column.Header</th>
+                    }
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var (item, index) in Items.Select((i, idx) => (i, idx)))
+                {
+                    <tr class="datagrid-row @(SelectedRowIndex == index ? "selected" : "")" 
+                        @onclick="@(() => HandleRowClick(index))"
+                        @oncontextmenu="@((MouseEventArgs e) => HandleRowContextMenu(index, e))"
+                        @oncontextmenu:preventDefault>
+                        @foreach (var column in Columns ?? GetColumns())
+                        {
+                            <td class="datagrid-cell" style="width: @(column.Width)px">@GetPropertyValue(item, column.Name)</td>
+                        }
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+    else
+    {
+        <div class="datagrid-empty-state">No data available</div>
+    }
+</div>
+
+@code {
+    [Parameter]
+    public List<object> Items { get; set; }
+
+    [Parameter]
+    public List<GridColumn> Columns { get; set; }
+
+    [Parameter]
+    public EventCallback<int> OnRowSelect { get; set; }
+
+    [Parameter]
+    public EventCallback<(double, double)> OnContextMenu { get; set; }
+
+    private int SelectedRowIndex = -1;
+
+    private async Task HandleRowClick(int rowIndex)
+    {
+        SelectedRowIndex = rowIndex;
+        await OnRowSelect.InvokeAsync(rowIndex);
+        StateHasChanged();
+    }
+
+    private async Task HandleRowContextMenu(int rowIndex, MouseEventArgs e)
+    {
+        SelectedRowIndex = rowIndex;
+        await OnContextMenu.InvokeAsync((e.ClientX, e.ClientY));
+        StateHasChanged();
+    }
+
+    private List<GridColumn> GetColumns()
+    {
+        if (Items == null || Items.Count == 0)
+            return new();
+
+        var itemType = Items[0].GetType();
+        var properties = itemType.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(p => p.CanRead && p.PropertyType.IsValueType || p.PropertyType == typeof(string))
+            .ToList();
+
+        return properties.Select(p => new GridColumn
+        {
+            Name = p.Name,
+            Header = FormatHeader(p.Name),
+            Width = 100
+        }).ToList();
+    }
+
+    private object GetPropertyValue(object item, string propertyName)
+    {
+        try
+        {
+            var property = item.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.IgnoreCase | BindingFlags.Instance);
+            return property?.GetValue(item) ?? "";
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    private string FormatHeader(string propertyName)
+    {
+        return System.Text.RegularExpressions.Regex.Replace(propertyName, "([A-Z])", " $1").Trim();
+    }
+
+    public class GridColumn
+    {
+        public string Name { get; set; }
+        public string Header { get; set; }
+        public int Width { get; set; }
+    }
+}
